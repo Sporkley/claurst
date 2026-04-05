@@ -1278,7 +1278,7 @@ impl App {
                 true
             }
             "session" | "resume" => {
-                self.session_browser.open(vec![]);
+                self.open_session_browser();
                 true
             }
             "clear" => {
@@ -1421,7 +1421,7 @@ impl App {
                 true
             }
             "rename" => {
-                self.session_browser.open(vec![]);
+                self.open_session_browser();
                 self.session_browser.start_rename();
                 true
             }
@@ -1445,6 +1445,37 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    fn open_session_browser(&mut self) {
+        let raw = tokio::runtime::Handle::current()
+            .block_on(claurst_core::history::list_sessions());
+        let entries = raw
+            .into_iter()
+            .map(|s| {
+                let now = chrono::Utc::now();
+                let secs = (now - s.updated_at).num_seconds().max(0) as u64;
+                let last_updated = if secs < 60 {
+                    "just now".to_string()
+                } else if secs < 3600 {
+                    format!("{} minutes ago", secs / 60)
+                } else if secs < 86400 {
+                    format!("{} hours ago", secs / 3600)
+                } else if secs < 172800 {
+                    "yesterday".to_string()
+                } else {
+                    format!("{} days ago", secs / 86400)
+                };
+                crate::session_browser::SessionEntry {
+                    id: s.id,
+                    title: s.title.unwrap_or_else(|| "(untitled)".to_string()),
+                    last_updated,
+                    message_count: s.messages.len(),
+                    cost_usd: s.total_cost,
+                }
+            })
+            .collect();
+        self.session_browser.open(entries);
     }
 
     fn close_secondary_views(&mut self) {
