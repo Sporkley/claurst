@@ -604,6 +604,9 @@ pub struct App {
     pub model_picker: ModelPickerState,
     /// Session browser overlay (/session, /resume, /rename, /export).
     pub session_browser: SessionBrowserState,
+    /// A slash command queued by an overlay (e.g. session browser Enter → "/resume <id>").
+    /// Consumed by the main loop in `main.rs` and dispatched via the command system.
+    pub queued_command: Option<String>,
     /// Session branching overlay (Ctrl+B) — create and switch branches.
     pub session_branching: crate::session_branching::SessionBranchingState,
     /// Task progress overlay (Ctrl+T) — shows task status with toggle capability.
@@ -890,6 +893,7 @@ impl App {
             elicitation: crate::elicitation_dialog::ElicitationDialogState::new(),
             model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
+            queued_command: None,
             session_branching: crate::session_branching::SessionBranchingState::new(),
             tasks_overlay: TasksOverlay::new(),
             export_dialog: ExportDialogState::new(),
@@ -1278,7 +1282,7 @@ impl App {
                 true
             }
             "session" | "resume" => {
-                self.session_browser.open(vec![]);
+                self.open_session_browser();
                 true
             }
             "clear" => {
@@ -1421,7 +1425,7 @@ impl App {
                 true
             }
             "rename" => {
-                self.session_browser.open(vec![]);
+                self.open_session_browser();
                 self.session_browser.start_rename();
                 true
             }
@@ -1445,6 +1449,39 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    fn open_session_browser(&mut self) {
+        let raw = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(claurst_core::history::list_sessions())
+        });
+        let entries = raw
+            .into_iter()
+            .map(|s| {
+                let now = chrono::Utc::now();
+                let secs = (now - s.updated_at).num_seconds().max(0) as u64;
+                let last_updated = if secs < 60 {
+                    "just now".to_string()
+                } else if secs < 3600 {
+                    format!("{} minutes ago", secs / 60)
+                } else if secs < 86400 {
+                    format!("{} hours ago", secs / 3600)
+                } else if secs < 172800 {
+                    "yesterday".to_string()
+                } else {
+                    format!("{} days ago", secs / 86400)
+                };
+                crate::session_browser::SessionEntry {
+                    id: s.id,
+                    title: s.title.unwrap_or_else(|| "(untitled)".to_string()),
+                    last_updated,
+                    message_count: s.messages.len(),
+                    cost_usd: s.total_cost,
+                }
+            })
+            .collect();
+        self.session_browser.open(entries);
     }
 
     fn close_secondary_views(&mut self) {
@@ -2330,6 +2367,13 @@ impl App {
                         KeyCode::Up => self.session_browser.select_prev(),
                         KeyCode::Down => self.session_browser.select_next(),
                         KeyCode::Char('r') => self.session_browser.start_rename(),
+                        KeyCode::Enter => {
+                            if let Some(entry) = self.session_browser.selected_session() {
+                                self.queued_command =
+                                    Some(format!("/resume {}", entry.id));
+                                self.session_browser.close();
+                            }
+                        }
                         _ => {}
                     }
                 }
