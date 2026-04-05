@@ -132,9 +132,9 @@ struct Cli {
     #[arg(long = "resume")]
     resume: Option<String>,
 
-    /// Maximum number of agentic turns
-    #[arg(long = "max-turns", default_value_t = 10)]
-    max_turns: u32,
+    /// Maximum number of agentic turns (0 = unlimited, default 10)
+    #[arg(long = "max-turns")]
+    max_turns: Option<u32>,
 
     /// Custom system prompt
     #[arg(long = "system-prompt", short = 's')]
@@ -722,7 +722,11 @@ async fn main() -> anyhow::Result<()> {
     // Build query config
     let mut query_config = claurst_query::QueryConfig::from_config_with_registry(&config, &model_registry);
     query_config.model_registry = Some(model_registry.clone());
-    query_config.max_turns = cli.max_turns;
+    query_config.max_turns = match cli.max_turns {
+        None => claurst_core::constants::MAX_TURNS_DEFAULT,
+        Some(0) => u32::MAX,
+        Some(n) => n,
+    };
     query_config.system_prompt = Some(system_prompt);
     query_config.append_system_prompt = None;
     query_config.working_directory = Some(cwd.display().to_string());
