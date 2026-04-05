@@ -604,6 +604,9 @@ pub struct App {
     pub model_picker: ModelPickerState,
     /// Session browser overlay (/session, /resume, /rename, /export).
     pub session_browser: SessionBrowserState,
+    /// A slash command queued by an overlay (e.g. session browser Enter → "/resume <id>").
+    /// Consumed by the main loop in `main.rs` and dispatched via the command system.
+    pub queued_command: Option<String>,
     /// Session branching overlay (Ctrl+B) — create and switch branches.
     pub session_branching: crate::session_branching::SessionBranchingState,
     /// Task progress overlay (Ctrl+T) — shows task status with toggle capability.
@@ -890,6 +893,7 @@ impl App {
             elicitation: crate::elicitation_dialog::ElicitationDialogState::new(),
             model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
+            queued_command: None,
             session_branching: crate::session_branching::SessionBranchingState::new(),
             tasks_overlay: TasksOverlay::new(),
             export_dialog: ExportDialogState::new(),
@@ -1448,8 +1452,10 @@ impl App {
     }
 
     fn open_session_browser(&mut self) {
-        let raw = tokio::runtime::Handle::current()
-            .block_on(claurst_core::history::list_sessions());
+        let raw = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(claurst_core::history::list_sessions())
+        });
         let entries = raw
             .into_iter()
             .map(|s| {
@@ -2361,6 +2367,13 @@ impl App {
                         KeyCode::Up => self.session_browser.select_prev(),
                         KeyCode::Down => self.session_browser.select_next(),
                         KeyCode::Char('r') => self.session_browser.start_rename(),
+                        KeyCode::Enter => {
+                            if let Some(entry) = self.session_browser.selected_session() {
+                                self.queued_command =
+                                    Some(format!("/resume {}", entry.id));
+                                self.session_browser.close();
+                            }
+                        }
                         _ => {}
                     }
                 }

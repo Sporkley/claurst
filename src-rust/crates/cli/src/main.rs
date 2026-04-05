@@ -1926,6 +1926,62 @@ async fn run_interactive(
                     }
 
                     app.handle_key_event(key);
+
+                    // Commands queued by overlays (e.g. session browser Enter) are
+                    // dispatched here.  The ResumeSession result handling below mirrors
+                    // the typed-/resume path above; a proper fix requires refactoring
+                    // the event loop into a single input-processing code path.
+                    if let Some(cmd) = app.queued_command.take() {
+                        cmd_ctx.messages = messages.clone();
+                        if let Some(result) = execute_command(&cmd, &mut cmd_ctx)
+                            .await
+                        {
+                            match result {
+                                CommandResult::ResumeSession(resumed_session) => {
+                                    session = resumed_session;
+                                    messages = session.messages.clone();
+                                    app.replace_messages(messages.clone());
+                                    cmd_ctx.config.model = Some(session.model.clone());
+                                    app.config.model = Some(session.model.clone());
+                                    tool_ctx.config.model = Some(session.model.clone());
+                                    app.model_name = session.model.clone();
+                                    tool_ctx.session_id = session.id.clone();
+                                    tool_ctx.file_history = Arc::new(ParkingMutex::new(
+                                        claurst_core::file_history::FileHistory::new(),
+                                    ));
+                                    tool_ctx.current_turn = Arc::new(
+                                        std::sync::atomic::AtomicUsize::new(0),
+                                    );
+                                    cmd_ctx.session_id = session.id.clone();
+                                    cmd_ctx.session_title = session.title.clone();
+                                    if let Some(saved_dir) = session.working_dir.as_ref() {
+                                        let saved_path =
+                                            std::path::PathBuf::from(saved_dir);
+                                        if saved_path.exists() {
+                                            tool_ctx.working_dir = saved_path.clone();
+                                            cmd_ctx.working_dir = saved_path;
+                                        }
+                                    }
+                                    app.config.project_dir =
+                                        Some(tool_ctx.working_dir.clone());
+                                    app.attach_turn_diff_state(
+                                        tool_ctx.file_history.clone(),
+                                        tool_ctx.current_turn.clone(),
+                                    );
+                                    app.status_message = Some(format!(
+                                        "Resumed session {}.",
+                                        &session.id[..8]
+                                    ));
+                                }
+                                CommandResult::Error(e) => {
+                                    app.status_message =
+                                        Some(format!("Error: {}", e));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
                     cmd_ctx.config = app.config.clone();
                     tool_ctx.config = app.config.clone();
                     if !app.model_name.is_empty() {
